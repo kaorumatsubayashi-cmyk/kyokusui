@@ -1206,52 +1206,71 @@ function placeDecor(sn, K) {
   var L = LAY.s;
   var placed = [];
   var HZ = VH * (LAY.port ? .13 : .22);
-  // candidate grid, jittered
+
+  // every piece is anchored at its base and grows upward, so it needs a box, not a circle
+  var BOX = {
+    hall: [206, 64, 114], azumaya: [66, 90, 16], pine: [54, 86, 12], tree: [50, 98, 10],
+    lantern: [19, 46, 12], tsukubai: [29, 28, 12], rock: [21, 20, 10], tuft: [17, 28, 8]
+  };
+  function box(kind, sc) {
+    var t = BOX[kind];
+    return { w: t[0] * sc, up: t[1] * sc, dn: t[2] * sc };
+  }
+
   var cands = [];
-  var cols = Math.round(VW / (46 * L)), rows = Math.round((VH - HZ) / (46 * L));
+  var cols = Math.round(VW / (40 * L)), rows = Math.round((VH - HZ) / (40 * L));
   for (var i = 0; i < cols; i++) for (var j = 0; j < rows; j++) {
     cands.push({
-      x: VW * .035 + (i + .5) * (VW * .93 / cols) + rnd(-14, 14) * L,
-      y: HZ + 12 * K + (j + .5) * ((VH * .97 - HZ) / rows) + rnd(-14, 14) * L
+      x: VW * .03 + (i + .5) * (VW * .94 / cols) + rnd(-12, 12) * L,
+      y: HZ + 10 * K + (j + .5) * ((VH * .98 - HZ) / rows) + rnd(-12, 12) * L
     });
   }
   shuffle(cands);
 
-  function ok(p, r, near) {
-    if (p.x < r * .95 || p.x > VW - r * .95 || p.y < HZ + 10 || p.y > VH - r * .42) return false;
+  var SEAT = { w: 72 * L, up: 44 * L, dn: 32 * L };
+  var pad = 5 * L;
+
+  function hit(p, bx, q, by) {
+    return Math.abs(p.x - q.x) < bx.w + by.w + pad &&
+      (p.y + bx.dn) > (q.y - by.up) - pad && (p.y - bx.up) < (q.y + by.dn) + pad;
+  }
+  function ok(p, bx, near) {
+    if (p.x - bx.w < 4 || p.x + bx.w > VW - 4) return false;
+    if (p.y - bx.up < HZ - 18 || p.y + bx.dn > VH - 2) return false;
+    // the base must stand on dry ground, and so must its left and right edges
+    var need = streamHalf + 9 * L;
     var dw = distToWater(p.x, p.y);
-    if (dw < streamHalf + r * .8 + 10 * L) return false;
-    if (near && dw > streamHalf + r + 74 * L) return false;
-    for (var k = 0; k < seatPts.length; k++) {
-      if (Math.hypot(seatPts[k].x - p.x, seatPts[k].y - p.y) < r * .8 + 54 * L) return false;
-    }
-    for (var m = 0; m < placed.length; m++) {
-      if (Math.hypot(placed[m].x - p.x, placed[m].y - p.y) < (placed[m].r + r) * .78) return false;
-    }
+    if (dw < need) return false;
+    if (distToWater(p.x - bx.w * .7, p.y) < need * .82) return false;
+    if (distToWater(p.x + bx.w * .7, p.y) < need * .82) return false;
+    if (near && dw > streamHalf + 78 * L) return false;
+    for (var k = 0; k < seatPts.length; k++) if (hit(p, bx, seatPts[k], SEAT)) return false;
+    for (var m = 0; m < placed.length; m++) if (hit(p, bx, placed[m].p, placed[m].b)) return false;
     return true;
   }
-  function put(r, near, sortFn, draw) {
-    var list = cands;
-    if (sortFn) { list = cands.slice().sort(sortFn); }
+  function put(kind, sc, near, sortFn, draw) {
+    var bx = box(kind, sc);
+    var list = sortFn ? cands.slice().sort(sortFn) : cands;
     for (var i2 = 0; i2 < list.length; i2++) {
-      if (ok(list[i2], r * L, near)) {
-        placed.push({ x: list[i2].x, y: list[i2].y, r: r * L });
-        svg.appendChild(draw(list[i2].x, list[i2].y));
+      if (ok(list[i2], bx, near)) {
+        placed.push({ p: list[i2], b: bx });
+        svg.appendChild(draw(list[i2].x, list[i2].y, sc));
         return true;
       }
     }
     return false;
   }
   var upperRight = function (a, b) { return (a.y - a.x * .5) - (b.y - b.x * .5); };
+  var lowerLeft = function (a, b) { return (b.y - b.x * .5) - (a.y - a.x * .5); };
 
-  put(122, false, upperRight, function (x, y) { return drawHall(x, y, .56 * K, sn); });
-  put(66, false, function (a, b) { return (b.x + b.y * .4) - (a.x + a.y * .4); }, function (x, y) { return drawAzumaya(x, y, .82 * L, sn); });
-  for (var i = 0; i < 6; i++) put(46, false, null, function (x, y) { return drawPine(x, y, rnd(.62, .92) * L, sn); });
-  for (i = 0; i < 5; i++) put(40, false, null, function (x, y) { return drawTree(x, y, rnd(.55, .85) * L, sn); });
-  for (i = 0; i < 3; i++) put(24, true, null, function (x, y) { return drawLantern(x, y, rnd(.8, 1.05) * L, sn); });
-  for (i = 0; i < 2; i++) put(26, true, null, function (x, y) { return drawTsukubai(x, y, rnd(.8, 1) * L, sn); });
-  for (i = 0; i < 11; i++) put(19, i < 7, null, function (x, y) { return drawRock(x, y, rnd(.6, 1.05) * L, sn); });
-  for (i = 0; i < 16; i++) put(15, false, null, function (x, y) { return drawTuft(x, y, rnd(.7, 1.15) * L, sn); });
+  put('hall', .56 * K, false, upperRight, function (x, y, sc) { return drawHall(x, y, sc, sn); });
+  put('azumaya', .82 * L, false, lowerLeft, function (x, y, sc) { return drawAzumaya(x, y, sc, sn); });
+  for (var i3 = 0; i3 < 6; i3++) put('pine', rnd(.62, .92) * L, false, null, function (x, y, sc) { return drawPine(x, y, sc, sn); });
+  for (i3 = 0; i3 < 5; i3++) put('tree', rnd(.55, .85) * L, false, null, function (x, y, sc) { return drawTree(x, y, sc, sn); });
+  for (i3 = 0; i3 < 3; i3++) put('lantern', rnd(.8, 1.05) * L, true, null, function (x, y, sc) { return drawLantern(x, y, sc); });
+  for (i3 = 0; i3 < 2; i3++) put('tsukubai', rnd(.8, 1) * L, true, null, function (x, y, sc) { return drawTsukubai(x, y, sc); });
+  for (i3 = 0; i3 < 11; i3++) put('rock', rnd(.6, 1.05) * L, i3 < 7, null, function (x, y, sc) { return drawRock(x, y, sc); });
+  for (i3 = 0; i3 < 16; i3++) put('tuft', rnd(.7, 1.15) * L, false, null, function (x, y, sc) { return drawTuft(x, y, sc, sn); });
 }
 
 /* seat position: perpendicular offset, pushed clear of any water */
