@@ -893,6 +893,13 @@ function seatT(slot) { return seatTs[slot]; }
 
 var VW = 1000, VH = 620, LAY = { s: 1, sx: 1, sy: 1, ox: 0, oy: 0, port: false };
 var waterSamples = [], pondInfo = null, streamHalf = 18, fixedBoxes = [], usedSlots = [];
+/* depth bands: everything standing on the ground is drawn in order of how near it is
+   to the viewer, so the cup passes behind a tree rooted below it and in front of one above */
+var bands = [], bandTop = 0, bandBot = 1000, NBAND = 26, duckBand = -1;
+function bandOf(y) {
+  var i = Math.floor((y - bandTop) / Math.max(1, bandBot - bandTop) * NBAND);
+  return Math.max(0, Math.min(NBAND - 1, i));
+}
 
 function measure() {
   var st = $('#stage');
@@ -1193,13 +1200,17 @@ function buildGarden() {
   spreadSeats();
 
   /* ---- decor with collision avoidance ---- */
+  bandTop = HZ - 60; bandBot = VH + 30; bands = []; duckBand = -1;
+  for (var bi = 0; bi < NBAND; bi++) { var bg = S('g', {}); svg.appendChild(bg); bands.push(bg); }
+
   placeDecor(sn, K);
 
   svg.appendChild(S('g', { id: 'poets-layer' }));
   svg.appendChild(S('g', { id: 'fx-layer' }));
-  var dk = S('g', { id: 'duck-layer' }); svg.appendChild(dk);
+  var dk = S('g', { id: 'duck-layer' });
   var ds = 56 * L;
   dk.appendChild(S('image', { id: 'duck', href: ASSETS.duck, x: -ds / 2, y: -ds / 2, width: ds, height: ds, filter: 'url(#sh)' }));
+  bands[0].appendChild(dk); duckBand = 0;
 
   drawPoets();
   particles(sn.pt);
@@ -1260,7 +1271,7 @@ function placeDecor(sn, K) {
         placed.push({ p: list[i2], b: bx });
         var el = draw(list[i2].x, list[i2].y, sc);
         el.setAttribute('data-d', kind);
-        svg.appendChild(el);
+        bands[bandOf(list[i2].y)].appendChild(el);
         return true;
       }
     }
@@ -1401,6 +1412,14 @@ function duckAt(t) {
 function placeDuck(t, bob) {
   var p = duckAt(t);
   var d = $('#duck', svg);
+  if (bands.length) {
+    var bi = bandOf(p.y);
+    if (bi !== duckBand) {
+      duckBand = bi;
+      var dl = d.parentNode;
+      bands[bi].insertBefore(dl, bands[bi].firstChild);
+    }
+  }
   d.setAttribute('transform', 'translate(' + p.x.toFixed(1) + ',' + (p.y + (bob || 0)).toFixed(1) + ') rotate(' + (Math.sin(t * 60) * 7).toFixed(1) + ')');
 }
 
