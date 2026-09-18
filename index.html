@@ -892,7 +892,7 @@ var seatTs = [];
 function seatT(slot) { return seatTs[slot]; }
 
 var VW = 1000, VH = 620, LAY = { s: 1, sx: 1, sy: 1, ox: 0, oy: 0, port: false };
-var waterSamples = [], pondInfo = null, streamHalf = 18;
+var waterSamples = [], pondInfo = null, streamHalf = 18, fixedBoxes = [], usedSlots = [];
 
 function measure() {
   var st = $('#stage');
@@ -1078,6 +1078,7 @@ function buildGarden() {
     '<filter id="sh" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#2B2A2C" flood-opacity=".22"/></filter>'));
 
   var HZ = VH * (LAY.port ? .13 : .22);
+  fixedBoxes = [];
   svg.appendChild(S('rect', { x: 0, y: 0, width: VW, height: VH, fill: 'url(#sky)' }));
   // 遠山
   svg.appendChild(S('path', {
@@ -1145,7 +1146,8 @@ function buildGarden() {
   var my = Math.min(topY - 26 * K, HZ + 30 * K);
   if (my > HZ - 6) {
     [[VW * .20, .9], [VW * .56, 1.18], [VW * .87, .78]].forEach(function (m) {
-      svg.appendChild(drawMound(m[0], my + rnd(-8, 10) * K, 136 * K * m[1], 46 * K * m[1], sn));
+      var mg = drawMound(m[0], my + rnd(-8, 10) * K, 136 * K * m[1], 46 * K * m[1], sn);
+      mg.setAttribute('data-d', 'mound'); svg.appendChild(mg);
     });
   }
 
@@ -1179,12 +1181,15 @@ function buildGarden() {
     var fi = Math.round(c.fallAt * (mainSamples.length - 1));
     var fp = mainSamples[fi], fq = mainSamples[(fi + 6) % mainSamples.length];
     var ang = Math.atan2(fq.y - fp.y, fq.x - fp.x) * 180 / Math.PI - 90;
-    svg.appendChild(drawFall(fp, ang, L * .95, sn));
+    var fg = drawFall(fp, ang, L * .95, sn); fg.setAttribute('data-d', 'fall'); svg.appendChild(fg);
+    var fr = 36 * L;
+    fixedBoxes.push({ p: { x: fp.x, y: fp.y }, b: { w: fr, up: fr, dn: fr } });
   }
 
-  /* ---- seats, computed before decor so decor can avoid them ---- */
-  seatPts = [];
-  for (var s2 = 0; s2 < 12; s2++) seatPts.push(computeSeat(s2));
+  /* ---- seats: only the ones actually occupied ---- */
+  seatPts = new Array(12);
+  usedSlots = G.players.map(function (p) { return p.slot; });
+  usedSlots.forEach(function (sl) { seatPts[sl] = computeSeat(sl); });
   spreadSeats();
 
   /* ---- decor with collision avoidance ---- */
@@ -1204,7 +1209,7 @@ var seatPts = [];
 
 function placeDecor(sn, K) {
   var L = LAY.s;
-  var placed = [];
+  var placed = fixedBoxes.slice();
   var HZ = VH * (LAY.port ? .13 : .22);
 
   // every piece is anchored at its base and grows upward, so it needs a box, not a circle
@@ -1227,8 +1232,7 @@ function placeDecor(sn, K) {
   }
   shuffle(cands);
 
-  var SEAT = { w: 72 * L, up: 44 * L, dn: 32 * L };
-  var pad = 5 * L;
+  var pad = 6 * L;
 
   function hit(p, bx, q, by) {
     return Math.abs(p.x - q.x) < bx.w + by.w + pad &&
@@ -1244,7 +1248,7 @@ function placeDecor(sn, K) {
     if (distToWater(p.x - bx.w * .7, p.y) < need * .82) return false;
     if (distToWater(p.x + bx.w * .7, p.y) < need * .82) return false;
     if (near && dw > streamHalf + 78 * L) return false;
-    for (var k = 0; k < seatPts.length; k++) if (hit(p, bx, seatPts[k], SEAT)) return false;
+    for (var k = 0; k < usedSlots.length; k++) if (hit(p, bx, seatPts[usedSlots[k]], seatBox(usedSlots[k]))) return false;
     for (var m = 0; m < placed.length; m++) if (hit(p, bx, placed[m].p, placed[m].b)) return false;
     return true;
   }
@@ -1254,7 +1258,9 @@ function placeDecor(sn, K) {
     for (var i2 = 0; i2 < list.length; i2++) {
       if (ok(list[i2], bx, near)) {
         placed.push({ p: list[i2], b: bx });
-        svg.appendChild(draw(list[i2].x, list[i2].y, sc));
+        var el = draw(list[i2].x, list[i2].y, sc);
+        el.setAttribute('data-d', kind);
+        svg.appendChild(el);
         return true;
       }
     }
@@ -1283,6 +1289,7 @@ function computeSeat(slot) {
   var cx = LAY.ox + LAY.AW * LAY.sx / 2, cy = LAY.oy + LAY.AH * LAY.sy / 2;
   var out = ((p.x - cx) * nx + (p.y - cy) * ny) >= 0 ? 1 : -1;
   var need = streamHalf + 42 * LAY.s;
+  var sb = seatBox(slot);
   var best = null;
   for (var k = 0; k < 16; k++) {
     var off = (52 + k * 9) * LAY.s;
@@ -1290,8 +1297,9 @@ function computeSeat(slot) {
     x = Math.max(VW * .07, Math.min(VW * .93, x));
     y = Math.max(VH * .085, Math.min(VH * .93, y));
     var dw = distToWater(x, y);
-    if (!best || dw > best.dw) best = { x: x, y: y, dw: dw };
-    if (dw >= need) return { x: x, y: y, px: p.x, py: p.y };
+    var free = clearOfFixed(x, y, sb);
+    if (!best || (free && dw > best.dw)) best = { x: x, y: y, dw: free ? dw : -1 };
+    if (dw >= need && free) return { x: x, y: y, px: p.x, py: p.y };
   }
   // still wet: try the other side
   for (k = 0; k < 14; k++) {
@@ -1300,31 +1308,55 @@ function computeSeat(slot) {
     x2 = Math.max(VW * .07, Math.min(VW * .93, x2));
     y2 = Math.max(VH * .085, Math.min(VH * .93, y2));
     var dw2 = distToWater(x2, y2);
-    if (dw2 > best.dw) best = { x: x2, y: y2, dw: dw2 };
-    if (dw2 >= need) return { x: x2, y: y2, px: p.x, py: p.y };
+    var free2 = clearOfFixed(x2, y2, sb);
+    if (free2 && dw2 > best.dw) best = { x: x2, y: y2, dw: dw2 };
+    if (dw2 >= need && free2) return { x: x2, y: y2, px: p.x, py: p.y };
   }
   return { x: best.x, y: best.y, px: p.x, py: p.y };
 }
+function seatK() { return Math.max(.72, LAY.s); }
+function clearOfFixed(x, y, box) {
+  for (var i = 0; i < fixedBoxes.length; i++) {
+    var f = fixedBoxes[i];
+    if (Math.abs(x - f.p.x) < box.w + f.b.w + 6 * LAY.s &&
+      (y + box.dn) > (f.p.y - f.b.up) - 6 * LAY.s && (y - box.up) < (f.p.y + f.b.dn) + 6 * LAY.s) return false;
+  }
+  return true;
+}
+function seatBox() {
+  // reserve the widest label any poet could ever show here: 風神 moves people between
+  // seats, and a timed-out poet gains a 「（時切れ）」 suffix after the garden is laid out
+  var K2 = seatK(), longest = 3;
+  if (G && G.players) G.players.forEach(function (p) { longest = Math.max(longest, String(p.name).length); });
+  var chars = longest + 5;
+  return { w: Math.max(30, (chars * 13 + 14) / 2) * K2, up: 36 * K2, dn: 50 * K2 };
+}
+
 /* nudge seats apart so two poets never sit on top of each other */
 function spreadSeats() {
-  var L = LAY.s, need = 64 * L, XW = 1.4, clear = streamHalf + 40 * L;
-  function ok2(x, y) {
-    return x > VW * .06 && x < VW * .94 && y > VH * .08 && y < VH * .94 && distToWater(x, y) >= clear;
+  var L = LAY.s, gap = 8 * L, clear = streamHalf + 40 * L;
+  var list = usedSlots.map(function (sl) { return { sl: sl, p: seatPts[sl], b: seatBox(sl) }; });
+  function ok2(x, y, box) {
+    return x > VW * .05 && x < VW * .95 && y > VH * .07 && y < VH * .95 &&
+      distToWater(x, y) >= clear && clearOfFixed(x, y, box);
   }
-  for (var pass = 0; pass < 18; pass++) {
+  for (var pass = 0; pass < 24; pass++) {
     var moved = false;
-    for (var i = 0; i < seatPts.length; i++) {
-      for (var j = i + 1; j < seatPts.length; j++) {
-        var a = seatPts[i], b = seatPts[j];
-        var dx = (b.x - a.x) / XW, dy = b.y - a.y;
-        var d = Math.hypot(dx, dy);
-        if (d >= need || d === 0) continue;
-        var push = (need - d) / 2 + .6;
-        var ux = (dx / d) * XW, uy = dy / d;
-        var na = { x: a.x - ux * push, y: a.y - uy * push };
-        var nb = { x: b.x + ux * push, y: b.y + uy * push };
-        if (ok2(na.x, na.y)) { a.x = na.x; a.y = na.y; moved = true; }
-        if (ok2(nb.x, nb.y)) { b.x = nb.x; b.y = nb.y; moved = true; }
+    for (var i = 0; i < list.length; i++) {
+      for (var j = i + 1; j < list.length; j++) {
+        var A = list[i], B = list[j];
+        var hA = (A.b.up + A.b.dn) / 2, hB = (B.b.up + B.b.dn) / 2;
+        var ayc = A.p.y + (A.b.dn - A.b.up) / 2, byc = B.p.y + (B.b.dn - B.b.up) / 2;
+        var dx = B.p.x - A.p.x, dy = byc - ayc;
+        var ox = (A.b.w + B.b.w + gap) - Math.abs(dx);
+        var oy = (hA + hB + gap) - Math.abs(dy);
+        if (ox <= 0 || oy <= 0) continue;
+        var px = 0, py = 0;
+        if (ox < oy) px = (dx >= 0 ? 1 : -1) * (ox / 2 + .5);
+        else py = (dy >= 0 ? 1 : -1) * (oy / 2 + .5);
+        var na = { x: A.p.x - px, y: A.p.y - py }, nb = { x: B.p.x + px, y: B.p.y + py };
+        if (ok2(na.x, na.y, A.b)) { A.p.x = na.x; A.p.y = na.y; moved = true; }
+        if (ok2(nb.x, nb.y, B.b)) { B.p.x = nb.x; B.p.y = nb.y; moved = true; }
       }
     }
     if (!moved) break;
@@ -1336,7 +1368,7 @@ function drawPoets() {
   var pl = $('#poets-layer', svg); pl.innerHTML = '';
   G.players.forEach(function (pp) {
     var s = seatPos(pp.slot);
-    var g = S('g', { transform: 'translate(' + s.x.toFixed(1) + ',' + s.y.toFixed(1) + ')', 'data-p': pp.id, opacity: pp.done ? '.5' : '1' });
+    var g = S('g', { transform: 'translate(' + s.x.toFixed(1) + ',' + s.y.toFixed(1) + ')', 'data-p': pp.id, 'data-d': 'poet', opacity: pp.done ? '.5' : '1' });
     g.style.transition = 'transform .6s cubic-bezier(.4,1.2,.5,1), opacity .4s';
     var K2 = Math.max(.72, LAY.s);
     g.appendChild(S('ellipse', { cx: 0, cy: 22 * K2, rx: 26 * K2, ry: 9 * K2, fill: '#6B6350', opacity: '.16' }));
