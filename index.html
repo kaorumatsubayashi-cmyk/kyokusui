@@ -606,9 +606,27 @@ function icon(ci, gender) {
 /* ===================== audio ===================== */
 
 var Audio2 = (function () {
-  var ctx = null, master = null, bgmGain = null, seGain = null, timer = null, step = 0;
+  var ctx = null, master = null, bgmGain = null, seGain = null, timer = null, step = 0, drift = 0;
+  var wave = null, noiseBuf = null, season = 'spring';
   var on = { bgm: true, se: true };
-  var SCALE = [293.66, 329.63, 392.00, 440.00, 493.88, 587.33, 659.25, 783.99, 880.00, 987.77];
+
+  /* 黒鍵の五音 — ファ#・ソ#・ラ#・ド#・レ#。四オクターヴ分ならべる */
+  var BLACK = [184.9972, 207.6523, 233.0819, 277.1826, 311.1270];
+  var PENTA = [];
+  for (var o = -1; o <= 2; o++) for (var i = 0; i < BLACK.length; i++) PENTA.push(BLACK[i] * Math.pow(2, o));
+
+  /* 季節ごとの調べ。音階は同じ、register と間合いと節回しで色を変える */
+  var BGM = {
+    spring: { ms: 760, lo: 6, hi: 16, dur: 2.5, extra: .36, grace: .30, drone: 8, vol: 1.00, bend: .22,
+      motif: [0, 2, 4, 3, 5, 4, 2, 1, 3, 5, 2, 0, 3, 4, 1, 2] },
+    summer: { ms: 600, lo: 9, hi: 19, dur: 1.7, extra: .46, grace: .16, drone: 12, vol: .92, bend: .10,
+      motif: [4, 2, 5, 3, 6, 4, 7, 5, 2, 6, 3, 5, 1, 4, 6, 3] },
+    autumn: { ms: 1040, lo: 4, hi: 14, dur: 3.3, extra: .18, grace: .36, drone: 6, vol: 1.00, bend: .34,
+      motif: [5, 4, 2, 3, 1, 2, 0, 3, 4, 2, 5, 1, 0, 2, 3, 1] },
+    winter: { ms: 1320, lo: 0, hi: 11, dur: 4.2, extra: .09, grace: .20, drone: 5, vol: .96, bend: .16,
+      motif: [2, 1, 3, 0, 2, 4, 1, 0, 3, 1, 2, 0, 4, 2, 1, 3] }
+  };
+
   function init() {
     if (ctx) return true;
     var AC = window.AudioContext || window.webkitAudioContext;
@@ -617,38 +635,91 @@ var Audio2 = (function () {
     master = ctx.createGain(); master.gain.value = .9; master.connect(ctx.destination);
     bgmGain = ctx.createGain(); bgmGain.gain.value = on.bgm ? .055 : 0; bgmGain.connect(master);
     seGain = ctx.createGain(); seGain.gain.value = on.se ? .30 : 0; seGain.connect(master);
+    // 琴の胴に近い倍音構成。奇数倍音をやや強く、高次はゆるやかに落とす
+    var im = [0, 1, .58, .40, .30, .21, .16, .12, .09, .07, .05, .04, .03, .022, .016, .012];
+    var re = new Float32Array(im.length);
+    wave = ctx.createPeriodicWave(re, new Float32Array(im), { disableNormalization: false });
+    noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * .06), ctx.sampleRate);
+    var nd = noiseBuf.getChannelData(0);
+    for (var i = 0; i < nd.length; i++) nd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / nd.length, 3);
     return true;
   }
-  function pluck(f, t, dur, gain, dest) {
-    var o = ctx.createOscillator(), o2 = ctx.createOscillator(), g = ctx.createGain();
-    o.type = 'triangle'; o.frequency.value = f;
-    o2.type = 'sine'; o2.frequency.value = f * 2.01;
-    var g2 = ctx.createGain(); g2.gain.value = .28; o2.connect(g2); g2.connect(g);
-    o.connect(g); g.connect(dest);
+
+  /* 爪ではじく一音 */
+  function koto(f, t, dur, gain, dest, bend) {
+    var o = ctx.createOscillator();
+    o.setPeriodicWave(wave);
+    o.frequency.setValueAtTime(f * 1.012, t);
+    o.frequency.exponentialRampToValueAtTime(f, t + .045);
+    if (bend) {
+      o.frequency.setValueAtTime(f, t + dur * .28);
+      o.frequency.linearRampToValueAtTime(f * 1.055, t + dur * .46);
+      o.frequency.linearRampToValueAtTime(f, t + dur * .72);
+    }
+    var lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(Math.min(11000, f * 9), t);
+    lp.frequency.exponentialRampToValueAtTime(Math.max(300, f * 2.2), t + dur * .7);
+    lp.Q.value = .6;
+    var g = ctx.createGain();
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(gain, t + .012);
+    g.gain.linearRampToValueAtTime(gain, t + .006);
+    g.gain.exponentialRampToValueAtTime(gain * .26, t + .22);
     g.gain.exponentialRampToValueAtTime(.0001, t + dur);
-    o.start(t); o2.start(t); o.stop(t + dur + .05); o2.stop(t + dur + .05);
+    o.connect(lp); lp.connect(g); g.connect(dest);
+    o.start(t); o.stop(t + dur + .06);
+    // 爪が弦に当たる音
+    var n = ctx.createBufferSource(); n.buffer = noiseBuf;
+    var bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f * 3.2; bp.Q.value = 1.4;
+    var ng = ctx.createGain();
+    ng.gain.setValueAtTime(gain * .5, t);
+    ng.gain.exponentialRampToValueAtTime(.0001, t + .07);
+    n.connect(bp); bp.connect(ng); ng.connect(dest); n.start(t);
   }
+
+  function note(idx, t, dur, gain, bend) {
+    var i = Math.max(0, Math.min(PENTA.length - 1, Math.round(idx)));
+    koto(PENTA[i], t, dur, gain, bgmGain, bend);
+  }
+
   function tick() {
     if (!ctx) return;
-    var t = ctx.currentTime + .05;
-    var pat = [0, 2, 4, 2, 5, 4, 2, 0, 3, 1];
-    var n = SCALE[pat[step % pat.length] + (step % 20 > 12 ? 3 : 0)] || SCALE[0];
-    pluck(n, t, 1.5, .5, bgmGain);
-    if (step % 4 === 0) pluck(SCALE[0] / 2, t, 2.4, .35, bgmGain);
-    if (Math.random() < .3) pluck(pick(SCALE), t + .28, 1.1, .3, bgmGain);
+    var c = BGM[season] || BGM.spring;
+    var t = ctx.currentTime + .06;
+    if (step % 17 === 0) drift = (Math.random() < .5 ? 0 : 3);
+    var base = c.lo + drift;
+    var idx = base + c.motif[step % c.motif.length];
+    if (idx > c.hi) idx -= 5;
+    note(idx, t, c.dur, .55 * c.vol, Math.random() < c.bend);
+    if (Math.random() < c.grace) note(idx + (Math.random() < .5 ? 2 : -2), t + .1, c.dur * .5, .26 * c.vol, false);
+    if (Math.random() < c.extra) note(idx + (Math.random() < .5 ? 3 : 5), t + c.ms / 2000, c.dur * .7, .30 * c.vol, false);
+    if (step % c.drone === 0) note(c.lo - (c.lo >= 5 ? 5 : 0), t, c.dur * 1.5, .30 * c.vol, false);
     step++;
   }
+
+  function restart() {
+    if (timer) { clearInterval(timer); timer = null; }
+    var c = BGM[season] || BGM.spring;
+    step = 0;
+    tick();
+    timer = setInterval(tick, c.ms);
+  }
+
   return {
-    start: function () { if (!init()) return; if (ctx.state === 'suspended') ctx.resume(); if (!timer) { tick(); timer = setInterval(tick, 900); } },
+    start: function (se) {
+      if (se) season = se;
+      if (!init()) return;
+      if (ctx.state === 'suspended') ctx.resume();
+      restart();
+    },
+    setSeason: function (se) { if (se && se !== season) { season = se; if (timer) restart(); } },
     stop: function () { if (timer) { clearInterval(timer); timer = null; } },
     setBgm: function (v) { on.bgm = v; if (bgmGain) bgmGain.gain.value = v ? .055 : 0; },
     setSe: function (v) { on.se = v; if (seGain) seGain.gain.value = v ? .30 : 0; },
     beep: function () {
       if (!ctx || !on.se) return; var t = ctx.currentTime;
       var o = ctx.createOscillator(), g = ctx.createGain();
-      o.type = 'sine'; o.frequency.setValueAtTime(920, t);
+      o.type = 'sine'; o.frequency.setValueAtTime(932.33, t);
       g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.5, t + .01);
       g.gain.exponentialRampToValueAtTime(.001, t + .13);
       o.connect(g); g.connect(seGain); o.start(t); o.stop(t + .16);
@@ -657,15 +728,15 @@ var Audio2 = (function () {
       if (!ctx || !on.se) return; var t = ctx.currentTime;
       var o = ctx.createOscillator(), g = ctx.createGain();
       o.type = 'triangle';
-      o.frequency.setValueAtTime(760, t); o.frequency.exponentialRampToValueAtTime(392, t + .42);
+      o.frequency.setValueAtTime(739.99, t); o.frequency.exponentialRampToValueAtTime(369.99, t + .42);
       g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.55, t + .02);
       g.gain.exponentialRampToValueAtTime(.001, t + .62);
       o.connect(g); g.connect(seGain); o.start(t); o.stop(t + .66);
     },
     chime: function (up) {
       if (!ctx || !on.se) return; var t = ctx.currentTime;
-      var ns = up ? [523, 659, 784] : [523, 415, 330];
-      for (var i = 0; i < ns.length; i++) pluck(ns[i], t + i * .1, .7, .45, seGain);
+      var ns = up ? [277.18, 369.99, 554.37] : [554.37, 415.30, 311.13];
+      for (var i = 0; i < ns.length; i++) koto(ns[i], t + i * .12, 1.4, .5, seGain, false);
     },
     whoosh: function () {
       if (!ctx || !on.se) return; var t = ctx.currentTime;
@@ -853,7 +924,7 @@ function startGame() {
   $('#c-odai').textContent = G.theme;
   $('#g-meta').textContent = SEASONS[G.season].name + '　' + (G.kind === 'waka' ? '和歌' : '漢詩') + '　' +
     G.players.length + '人　' + G.course.name;
-  Audio2.start();
+  Audio2.start(G.season);
   intro();
 }
 
